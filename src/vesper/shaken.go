@@ -3,18 +3,18 @@
 package main
 
 import (
-	"fmt"
-	"time"
 	"crypto/ecdsa"
 	"crypto/rand"
 	"crypto/sha256"
-	"math/big"
-	"encoding/base64"
-	"strings"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/pem"
+	"fmt"
 	"io/ioutil"
+	"math/big"
 	"net/http"
+	"strings"
+	"time"
 	"vesper/publickeys"
 )
 
@@ -76,9 +76,9 @@ func encodeEC(header, claims []byte, key *ecdsa.PrivateKey) (string, string, err
 		r := big.NewInt(0)
 		s := big.NewInt(0)
 		h.Write([]byte(data))
-		r,s,err = ecdsa.Sign(rand.Reader, key, h.Sum(nil))
+		r, s, err = ecdsa.Sign(rand.Reader, key, h.Sum(nil))
 		signature := r.Bytes()
- 		signature = append(signature, s.Bytes()...)
+		signature = append(signature, s.Bytes()...)
 		return signature, err
 	}
 	return encodeWithSigner(header, claims, sg)
@@ -112,12 +112,11 @@ func verifyEC(token string, key *ecdsa.PublicKey) error {
 	return verifyWithSigner(token, ver)
 }
 
-
 //------------------------------------------------------------------
 // createSignature is called to create a JWT using ES256 algorithm.
 // Note: The header and claims part of the created JWT is stripped out
 //			 before returning the signature only
-func createSignature(h, c, p []byte) (string, string, error)  {
+func createSignature(h, c, p []byte) (string, string, error) {
 	block, _ := pem.Decode(p)
 	if block != nil {
 		// alg = ES256
@@ -174,15 +173,15 @@ func verifySignature(x5u, token string, verifyCA bool) (string, int, error) {
 		return "VESPER-4159", http.StatusBadRequest, err
 	}
 	now := time.Now()
-	opts := x509.VerifyOptions{CurrentTime: now,}
+	opts := x509.VerifyOptions{CurrentTime: now}
 	if verifyCA {
-		opts = x509.VerifyOptions{CurrentTime: now, Roots: rootCerts.Root(),}
+		opts = x509.VerifyOptions{CurrentTime: now, Roots: rootCerts.Root()}
 	}
 	if _, err := cert.Verify(opts); err != nil {
 		switch err.Error() {
 		case "x509: certificate has expired or is not yet valid":
 			return "VESPER-4160", http.StatusBadRequest, err
-		case "x509: certificate signed by unknown authority" :
+		case "x509: certificate signed by unknown authority":
 			if verifyCA {
 				return "VESPER-4161", http.StatusBadRequest, err
 			}
@@ -200,7 +199,7 @@ func verifySignature(x5u, token string, verifyCA bool) (string, int, error) {
 			}
 		}
 	}
-		
+
 	// ES256
 	ecdsa_pub, ok := cert.PublicKey.(*ecdsa.PublicKey)
 	if !ok {
