@@ -3,15 +3,16 @@
 package main
 
 import (
-	"io"
 	"encoding/json"
+	"io"
 	"net/http"
 	"time"
+
 	"github.com/httprouter"
 	"github.com/satori/go.uuid"
 )
 
-// SResponse
+// SResponse represents response body
 type SResponse struct {
 	SigningResponse ErrorBlob `json:"signingResponse"`
 }
@@ -37,13 +38,13 @@ func signRequest(response http.ResponseWriter, request *http.Request, _ httprout
 		// empty request body
 		logError("Type=vesperInvalidJson, TraceID=%v, ClientIP=%v, Module=signRequest, ReasonCode=VESPER-4001, ReasonString=empty request body", traceID, clientIP)
 		response.WriteHeader(http.StatusBadRequest)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: "VESPER-4001", ReasonString: "empty request body"}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: "VESPER-4001", ReasonString: "empty request body"}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
-	case err != nil :
+	case err != nil:
 		logError("Type=vesperInvalidJson, TraceID=%v, ClientIP=%v, Module=signRequest, ReasonCode=VESPER-4002, ReasonString=received invalid json", traceID, clientIP)
 		response.WriteHeader(http.StatusBadRequest)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: "VESPER-4002", ReasonString: "Unable to parse request body"}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: "VESPER-4002", ReasonString: "Unable to parse request body"}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
 	default:
@@ -52,7 +53,7 @@ func signRequest(response http.ResponseWriter, request *http.Request, _ httprout
 	orderedMap, _, _, _, _, errCode, err := validatePayload(r, traceID, clientIP)
 	if err != nil {
 		response.WriteHeader(http.StatusBadRequest)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: errCode, ReasonString: err.Error()}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: errCode, ReasonString: err.Error()}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
 	}
@@ -61,12 +62,12 @@ func signRequest(response http.ResponseWriter, request *http.Request, _ httprout
 
 	x, p := signingCredentials.Signing()
 	// at this point, the input has been validated
-	hdr := ShakenHdr{	Alg: "ES256", Ppt: "shaken", Typ: "passport", X5u: x}
+	hdr := ShakenHdr{Alg: "ES256", Ppt: "shaken", Typ: "passport", X5u: x}
 	hdrBytes, err := json.Marshal(hdr)
 	if err != nil {
 		logError("Type=vesperRequestPayload, TraceID=%v, ClientIP=%v, Module=signRequest, ReasonCode=VESPER-5050, ReasonString=error in converting header to byte array : %v", traceID, clientIP, err)
 		response.WriteHeader(http.StatusInternalServerError)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: "VESPER-5050", ReasonString: "error in converting header to byte array"}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: "VESPER-5050", ReasonString: "error in converting header to byte array"}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
 	}
@@ -74,7 +75,7 @@ func signRequest(response http.ResponseWriter, request *http.Request, _ httprout
 	if err != nil {
 		logError("Type=vesperRequestPayload, TraceID=%v, ClientIP=%v, Module=signRequest, ReasonCode=VESPER-5051, ReasonString=error in converting claims to byte array : %v", traceID, clientIP, err)
 		response.WriteHeader(http.StatusInternalServerError)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: "VESPER-5051", ReasonString: "error in converting claims to byte array"}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: "VESPER-5051", ReasonString: "error in converting claims to byte array"}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
 	}
@@ -82,7 +83,7 @@ func signRequest(response http.ResponseWriter, request *http.Request, _ httprout
 	if err != nil {
 		logError("Type=vesperRequestPayload, TraceID=%v, ClientIP=%v, Module=signRequest, ReasonCode=VESPER-5052, ReasonString=error in signing request for request payload (%+v) : %v", traceID, clientIP, r, err)
 		response.WriteHeader(http.StatusInternalServerError)
-		jsonErr := SResponse{SigningResponse : ErrorBlob{ReasonCode: "VESPER-5052", ReasonString: "error in signing request"}}
+		jsonErr := SResponse{SigningResponse: ErrorBlob{ReasonCode: "VESPER-5052", ReasonString: "error in signing request"}}
 		json.NewEncoder(response).Encode(jsonErr)
 		return
 	}

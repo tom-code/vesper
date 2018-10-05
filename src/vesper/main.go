@@ -8,39 +8,39 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"syscall"
-	"context"
-	"time"
-	"strings"
 	"regexp"
-	"github.com/httprouter"
-	"github.com/cors"
-	"github.com/comcast/irislogger"
+	"strings"
+	"syscall"
+	"time"
 	"vesper/configuration"
-	"vesper/rootcerts"
 	"vesper/eks"
-	"vesper/sticr"
-	"vesper/signcredentials"
-	"vesper/replayattack"
 	"vesper/publickeys"
+	"vesper/replayattack"
+	"vesper/rootcerts"
+	"vesper/signcredentials"
+	"vesper/sticr"
+
+	"github.com/buaazp/fasthttprouter"
+	"github.com/comcast/irislogger"
+	"github.com/valyala/fasthttp"
 )
 
 var (
-	info												*irislogger.Logger
-	rootCerts										*rootcerts.RootCerts
-	signingCredentials					*signcredentials.SigningCredentials
-	eksCredentials							*eks.EksCredentials
-	x5u													*sticr.SticrHost
-	httpClient									*http.Client
-	regexInfo										*regexp.Regexp
-	regexAlg										*regexp.Regexp
-	regexPpt										*regexp.Regexp
-	replayAttackCache						*replayattack.Cache
+	info               *irislogger.Logger
+	rootCerts          *rootcerts.RootCerts
+	signingCredentials *signcredentials.SigningCredentials
+	eksCredentials     *eks.EksCredentials
+	x5u                *sticr.SticrHost
+	httpClient         *http.Client
+	regexInfo          *regexp.Regexp
+	regexAlg           *regexp.Regexp
+	regexPpt           *regexp.Regexp
+	replayAttackCache  *replayattack.Cache
 )
 
 // ErrorBlob -- This is a standard error object
 type ErrorBlob struct {
-	ReasonCode string `json:"reasonCode"`
+	ReasonCode   string `json:"reasonCode"`
 	ReasonString string `json:"reasonString"`
 }
 
@@ -55,24 +55,23 @@ func initializeLogging() (err error) {
 
 // function to log in specific format
 func logInfo(format string, args ...interface{}) {
-	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version=" + softwareVersion + ", Code=Info, "+format, args...)
+	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version="+softwareVersion+", Code=Info, "+format, args...)
 }
 
 // function to log errors
 func logError(format string, args ...interface{}) {
-	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version=" + softwareVersion + ", Code=Error, "+format, args...)
+	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version="+softwareVersion+", Code=Error, "+format, args...)
 }
 
 // function to log critical errors
 func logCritical(format string, args ...interface{}) {
-	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version=" + softwareVersion + ", Code=Critical, "+format, args...)
+	info.Printf(time.Now().Format("2006-01-02 15:04:05")+" vesper="+configuration.ConfigurationInstance().LogHost+", Version="+softwareVersion+", Code=Critical, "+format, args...)
 }
-
 
 // Read config file
 // Instantiate logging
 func init() {
-	if (len(os.Args) != 2) {
+	if len(os.Args) != 2 {
 		log.Fatal("The config file (ABSOLUTE PATH + FILE NAME) must be the only command line arguement")
 	}
 
@@ -90,21 +89,21 @@ func init() {
 
 	// create http client object once - to be reused
 	httpClient = &http.Client{Timeout: time.Duration(2 * time.Second)}
-	
+
 	// initiatlize sks credentials object
 	eksCredentials, err = eks.InitObject(configuration.ConfigurationInstance().EksCredentialsFile)
 	if err != nil {
 		logCritical("Type=eksConfig, Message=%v.... cannot start Vesper Service .... ", err)
 		os.Exit(1)
-	}		
+	}
 
 	// initiatlize sticr object
 	x5u, err = sticr.InitObject(configuration.ConfigurationInstance().SticrHostFile)
 	if err != nil {
 		logCritical("Type=sticrConfig, Message=%v.... cannot start Vesper Service .... ", err)
 		os.Exit(2)
-	}	
-	
+	}
+
 	// After sks credentials object is successfully initialized, initiatlize rootcerts object
 	signingCredentials, err = signcredentials.InitObject(info, softwareVersion, httpClient, eksCredentials, x5u)
 	if err != nil {
@@ -118,10 +117,10 @@ func init() {
 		logCritical("Type=rootCerts, Message=%v.... cannot start Vesper Service .... ", err)
 		os.Exit(4)
 	}
-	
+
 	// instantiate cache to hold stringified claims from identity header in request payload, during verification
 	replayAttackCache = replayattack.InitObject()
-	
+
 	// Compile the expression once
 	regexInfo = regexp.MustCompile(`^info=<..*>$`)
 	regexAlg = regexp.MustCompile(`^alg=ES256$`)
@@ -135,20 +134,15 @@ func main() {
 	signal.Ignore(syscall.SIGPIPE)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
-	router := httprouter.New()
-	router.GET("/v1/version", version)
-	router.POST("/stir/v1/signing", signRequest)
-	router.POST("/stir/v1/verification", verifyRequest)
+	fRouter := fasthttprouter.New()
+	fRouter.GET("/v1/version", cors(fversion))
+	fRouter.POST("/stir/v1/signing", cors(fSignRequest))
+	fRouter.POST("/stir/v1/verification", cors(fverifyRequest))
 
 	// Start the service.
 	// Note: netstats -plnt shows a IPv6 TCP socket listening on localhost:9000
 	//       but no IPv4 TCP socket. This is not an issue
-	c := cors.New(cors.Options{
-		AllowedMethods: []string{"GET", "POST"},
-		AllowedHeaders: []string{"accept", "Content-Type", "Authorization"},
-		AllowCredentials: true,
-	})
-	handler := c.Handler(router)
+	handler := fRouter.Handler
 	errs := make(chan error)
 
 	// start periodic tickers - each in a separate goroutine
@@ -159,17 +153,17 @@ func main() {
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		eksCredentialsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().EksCredentialsRefreshInterval)*time.Minute)
+		eksCredentialsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().EksCredentialsRefreshInterval) * time.Minute)
 		defer eksCredentialsRefreshTicker.Stop()
 		for {
 			select {
-			case <- eksCredentialsRefreshTicker.C:
+			case <-eksCredentialsRefreshTicker.C:
 				// check for eks config changes
 				err := eksCredentials.UpdateEksCredentials()
 				if err != nil {
 					logInfo("Type=vesperRefreshEksCredentials, Message=%v", err)
 				}
-			case <- stopEksCredentialsRefreshTicker:
+			case <-stopEksCredentialsRefreshTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped eks credentials refresh ticker")
 				return
 			}
@@ -182,19 +176,18 @@ func main() {
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		sticrRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().SticrFileCheckInterval)*time.Minute)
+		sticrRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().SticrFileCheckInterval) * time.Minute)
 		defer sticrRefreshTicker.Stop()
 		for {
 			select {
-			case <- sticrRefreshTicker.C:
+			case <-sticrRefreshTicker.C:
 				x5u.UpdateSticrHost()
-			case <- stopSticrRefreshTicker:
+			case <-stopSticrRefreshTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped sticr url refresh ticker")
 				return
 			}
 		}
 	}()
-	
 
 	stopRootCertsRefreshTicker := make(chan struct{})
 	go func() {
@@ -203,14 +196,14 @@ func main() {
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		rootCertsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().RootCertsFetchInterval)*time.Second)
+		rootCertsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().RootCertsFetchInterval) * time.Second)
 		defer rootCertsRefreshTicker.Stop()
 		for {
 			select {
-			case <- rootCertsRefreshTicker.C:
+			case <-rootCertsRefreshTicker.C:
 				// fetch root certs from EKS and replace cached ones
 				rootCerts.FetchRootCertsFromEks()
-			case <- stopRootCertsRefreshTicker:
+			case <-stopRootCertsRefreshTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped root certs refresh ticker")
 				return
 			}
@@ -223,14 +216,14 @@ func main() {
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		signingCredentialsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().SigningCredentialsFetchInterval)*time.Second)
+		signingCredentialsRefreshTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().SigningCredentialsFetchInterval) * time.Second)
 		defer signingCredentialsRefreshTicker.Stop()
 		for {
 			select {
-			case <- signingCredentialsRefreshTicker.C:
+			case <-signingCredentialsRefreshTicker.C:
 				// fetch current x5u and privatekey for signing. This will replace cached credentials
 				signingCredentials.FetchSigningCredentialsFromEks()
-			case <- stopSigningCredentialsRefreshTicker:
+			case <-stopSigningCredentialsRefreshTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped signing credentials refresh ticker")
 				return
 			}
@@ -238,21 +231,21 @@ func main() {
 	}()
 	stopReplayAttackCacheValidationTicker := make(chan struct{})
 	go func() {
-		t := time.Now().Unix()		// time at startup
+		t := time.Now().Unix() // time at startup
 		// start periodic ticker to clear stale replay attack cache
 		// NewTicker returns a new Ticker containing a channel that will send the time with
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		replayAttackCacheValidationTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().ReplayAttackCacheValidationInterval)*time.Second)
+		replayAttackCacheValidationTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().ReplayAttackCacheValidationInterval) * time.Second)
 		defer replayAttackCacheValidationTicker.Stop()
 		for {
 			select {
-			case <- replayAttackCacheValidationTicker.C:
+			case <-replayAttackCacheValidationTicker.C:
 				// periodic cleanup of stale replay attack cache
 				replayAttackCache.Remove(t)
-				t += 1	// increment time by 1 second; no mutex needed here
-			case <- stopReplayAttackCacheValidationTicker:
+				t += 1 // increment time by 1 second; no mutex needed here
+			case <-stopReplayAttackCacheValidationTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped stale replay attack cache ticker")
 				return
 			}
@@ -265,32 +258,41 @@ func main() {
 		// a period specified by the duration argument. It adjusts the intervals or drops
 		// ticks to make up for slow receiver.
 		// https://golang.org/pkg/time/#NewTicker
-		publicKeysCacheFlushTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().PublicKeysCacheFlushInterval)*time.Second)
+		publicKeysCacheFlushTicker := time.NewTicker(time.Duration(configuration.ConfigurationInstance().PublicKeysCacheFlushInterval) * time.Second)
 		defer publicKeysCacheFlushTicker.Stop()
 		for {
 			select {
-			case <- publicKeysCacheFlushTicker.C:
+			case <-publicKeysCacheFlushTicker.C:
 				publickeys.FlushCache()
-			case <- stopPublicKeysCacheFlushTicker:
+			case <-stopPublicKeysCacheFlushTicker:
 				logInfo("Type=vesperTimerStop, Message=stopped public keys cache flush ticker")
 				return
 			}
 		}
 	}()
-	
-	var srv http.Server
+
+	var fsrv *fasthttp.Server
+	// var srv http.Server
 	// Start HTTPS server only if cert and key file exist
 	if (len(strings.TrimSpace(configuration.ConfigurationInstance().SslCertFile)) > 0) && (len(strings.TrimSpace(configuration.ConfigurationInstance().SslKeyFile)) > 0) {
 		go func() {
 			httpPort := ":443"
 			if len(strings.TrimSpace(configuration.ConfigurationInstance().HttpPort)) > 0 {
 				httpPort = ":" + configuration.ConfigurationInstance().HttpPort
-			} 
-			logInfo("Type=vesperHttpsServiceStart, Message=Staring HTTPS service on port %v ...", httpPort)
+			}
+			logInfo("Type=vesperHttpsServiceStart, Message=Starting HTTPS service on port %v ...", httpPort)
+
 			// Note: netstats -plnt shows a IPv6 TCP socket listening on ":443"
 			//       but no IPv4 TCP socket. This is not an issue
-			srv := &http.Server{Addr: httpPort, Handler: handler}
-			if err := srv.ListenAndServeTLS(configuration.ConfigurationInstance().SslCertFile, configuration.ConfigurationInstance().SslKeyFile); err != nil {
+
+			// srv := &http.Server{Addr: httpPort, Handler: handler}
+			// if err := srv.ListenAndServeTLS(configuration.ConfigurationInstance().SslCertFile, configuration.ConfigurationInstance().SslKeyFile); err != nil {
+			// 	logError("Type=vesperHttpServiceFailure, Message=Could not start serving service due to (error: %s)", err)
+			// 	errs <- err
+			// }
+
+			fsrv = &fasthttp.Server{Handler: handler}
+			if err := fsrv.ListenAndServeTLS(httpPort, configuration.ConfigurationInstance().SslCertFile, configuration.ConfigurationInstance().SslKeyFile); err != nil {
 				logError("Type=vesperHttpServiceFailure, Message=Could not start serving service due to (error: %s)", err)
 				errs <- err
 			}
@@ -302,24 +304,26 @@ func main() {
 			if len(strings.TrimSpace(configuration.ConfigurationInstance().HttpPort)) > 0 {
 				httpPort = configuration.ConfigurationInstance().HttpPort
 			}
-			httpHost := "127.0.0.1" 
+			httpHost := "127.0.0.1"
 			if len(strings.TrimSpace(configuration.ConfigurationInstance().HttpHost)) > 0 {
 				httpHost = configuration.ConfigurationInstance().HttpHost
 			}
 			hostPort := httpHost + ":" + httpPort
-			logInfo("Type=vesperHttpServiceStart, Message=Staring HTTP service on %v ...", hostPort)
+			logInfo("Type=vesperHttpServiceStart, Message=Starting HTTP service on %v ...", hostPort)
 			// Start the service.
 			// Note: netstats -plnt shows a IPv6 TCP socket listening on user specified port
 			//       but no IPv4 TCP socket. This is not an issue
-			srv := &http.Server{Addr: hostPort, Handler: handler}
-			if err := srv.ListenAndServe(); err != nil {
+			// srv := &http.Server{Addr: hostPort, Handler: handler}
+			fsrv = &fasthttp.Server{Handler: handler}
+			if err := fsrv.ListenAndServe(hostPort); err != nil {
 				logError("Type=vesperHttpServiceFailure, Message=Could not start serving service due to (error: %s)", err)
 				errs <- err
 			}
-		 }()
+		}()
 	}
 
 	// This will run forever until channel receives error
+
 	select {
 	case err := <-errs:
 		logError("Type=vesperHttpServiceFailure, Message=Could not start service due to (error: %s)", err)
@@ -328,14 +332,35 @@ func main() {
 		logInfo("Type=vesperShutdown, Message=Shutting down vesper .... ")
 		// Pass a context with a timeout to tell a blocking function that it
 		// should abandon its work after the timeout elapses.
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		defer cancel()
-		err := srv.Shutdown(ctx)
-		if err != nil {
-			logError("Type=vesperHttpServiceShutdownFailure, Message=Shutdown of http server error - %v", err)
-			logInfo("Type=vesperStop, Message=vesper stopped but NOT gracefully")
-		} else {
-			logInfo("Type=vesperStop, Message=vesper gracefully stopped")
+		// ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		// err := srv.Shutdown(ctx)
+		// defer cancel()
+
+		shutdownChannel := make(chan struct{})
+		go func() {
+			err := fsrv.Shutdown()
+			if err != nil {
+				logError("Type=vesperHttpServiceShutdownFailure, Message=Shutdown of http server error - %v", err)
+				logInfo("Type=vesperStop, Message=vesper stopped but NOT gracefully")
+			} else {
+				logInfo("Type=vesperStop, Message=vesper gracefully stopped")
+			}
+			shutdownChannel <- struct{}{}
+		}()
+
+		// wait for specific amount of time and then exit
+		for {
+			select {
+			case <-time.After(15 * time.Second):
+				logError("Type=vesperHttpServiceShutdownFailure, Message=Shutdown taking too long, exiting...")
+				return
+			case <-shutdownChannel:
+				// already printed message, just exit
+				logInfo("Type=vesperHttpServiceShutDown, Message=Shutdown routine returned, exiting ...")
+				return
+			}
 		}
+
 	}
+
 }
